@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+plotly
+streamlit-ace
+streamlit-option-menu
+snowflake-snowpark-python
+python-dotenv
+dateutil
+pydeck

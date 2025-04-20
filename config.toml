@@ -1,0 +1,17 @@
+[general]
+email = "jinghui.me@gmail.com"
+# The email address for the Streamlit sharing service.
+
+[server]
+headless = true
+port = 8501
+enableCORS = false
+# Configuration for the server, including running in headless mode and setting the port.
+
+[theme]
+primaryColor = "#F39C12"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F0F0"
+textColor = "#000000"
+font = "sans serif"
+# Theme settings for the Streamlit application, including colors and font.
