@@ -146,18 +146,46 @@ def optimize_page():
     
     with col1:
         st.subheader("Delivery Route Optimizer")
-        st.write(f"Optimizing routes for {len(delivery_data)} deliveries using up to {max_vehicles} vehicles")
+        
+        # Filter out completed deliveries for statistics
+        if 'status' in delivery_data.columns:
+            pending_deliveries = delivery_data[delivery_data['status'] != 'Delivered']
+            completed_count = len(delivery_data) - len(pending_deliveries)
+        else:
+            pending_deliveries = delivery_data
+            completed_count = 0
+            
+        st.write(f"Optimizing routes for {len(pending_deliveries)} pending deliveries using up to {max_vehicles} vehicles")
         
         # Statistics
         st.write("#### Delivery Statistics")
-        st.write(f"Total Deliveries: {len(delivery_data)}")
+        total_count = len(delivery_data)
+        pending_count = len(pending_deliveries)
+        
+        col1a, col1b = st.columns(2)
+        with col1a:
+            st.metric("Total Deliveries", total_count)
+        with col1b:
+            st.metric("Pending Deliveries", pending_count, 
+                     delta=f"-{completed_count}" if completed_count > 0 else None)
         
         if 'priority' in delivery_data.columns:
-            priority_counts = delivery_data['priority'].value_counts()
+            # Show priority breakdown for pending deliveries only
+            priority_counts = pending_deliveries['priority'].value_counts()
+            
+            # Display priority counts in a more visual way
+            st.write("##### Priority Breakdown")
+            priority_cols = st.columns(min(3, len(priority_counts)))
+            
+            for i, (priority, count) in enumerate(priority_counts.items()):
+                col_idx = i % len(priority_cols)
+                with priority_cols[col_idx]:
+                    st.metric(f"{priority}", count)
         
         if 'weight_kg' in delivery_data.columns:
-            total_weight = delivery_data['weight_kg'].sum()
-            st.write(f"Total Weight: {total_weight:.2f} kg")
+            # Calculate weight only for pending deliveries
+            total_weight = pending_deliveries['weight_kg'].sum()
+            st.metric("Total Weight (Pending)", f"{total_weight:.2f} kg")
     
     with col2:
         st.write("#### Vehicle Availability")
@@ -185,9 +213,15 @@ def optimize_page():
             with st.spinner("Calculating optimal routes..."):
                 start_time = time.time()
                 
-                # Prepare data for optimization
+                # Filter out completed deliveries before optimization
+                if 'status' in delivery_data.columns:
+                    pending_deliveries = delivery_data[delivery_data['status'] != 'Delivered']
+                else:
+                    pending_deliveries = delivery_data
+                
+                # Prepare data for optimization - USE PENDING DELIVERIES ONLY
                 optimization_result = run_optimization(
-                    delivery_data=delivery_data,
+                    delivery_data=pending_deliveries,  # ← CHANGED: Use pending_deliveries instead
                     vehicle_data=available_vehicles.iloc[:max_vehicles],
                     distance_matrix=distance_matrix,
                     time_matrix=time_matrix,
@@ -206,10 +240,16 @@ def optimize_page():
             # Use existing results
             optimization_result = st.session_state.optimization_result
             
-        # Display results
+        # Filter pending deliveries before displaying results    
+        if 'status' in delivery_data.columns:
+            pending_deliveries = delivery_data[delivery_data['status'] != 'Delivered']
+        else:
+            pending_deliveries = delivery_data
+            
+        # Display results with filtered pending deliveries
         display_optimization_results(
             optimization_result=optimization_result,
-            delivery_data=delivery_data,
+            delivery_data=pending_deliveries,  # ← CHANGED: Use pending_deliveries instead
             vehicle_data=available_vehicles.iloc[:max_vehicles],
             distance_matrix=distance_matrix,
             time_matrix=time_matrix,
@@ -893,10 +933,16 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
 
     # Process data for calendar view
     if routes:
+        # First, collect all assigned deliveries and their details
         calendar_data = []
         
+        # Track which deliveries were actually included in routes
+        assigned_delivery_ids = set()
+        
+        # Step 1: Process all assigned deliveries first
         for vehicle_id, route in routes.items():
             for delivery in route:
+                assigned_delivery_ids.add(delivery['id'])
                 # Get vehicle info
                 vehicle_info = vehicle_data[vehicle_data['vehicle_id'] == vehicle_id].iloc[0]
                 vehicle_type = vehicle_info.get('vehicle_type', 'Standard')
@@ -939,6 +985,14 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
                     # Determine if delivery is on time
                     on_time = start_mins <= estimated_arrival_mins <= end_mins
                     
+                    # Set color based on on-time status and assignment
+                    if on_time:
+                        # Green for on-time
+                        color = 'on_time'
+                    else:
+                        # Red for not on-time
+                        color = 'late'
+
                     calendar_data.append({
                         'delivery_id': delivery_id,
                         'customer_name': customer_name,
@@ -955,10 +1009,72 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
                         'Task': f"{delivery_id}: {customer_name}",
                         'Vehicle Task': f"{vehicle_id}: {driver_name}",
                         'on_time': on_time,
+                        'assigned': True,
+                        'color': color,
                         'delivery_date': pd.to_datetime(date_str)
                     })
                 except Exception as e:
                     st.warning(f"Could not process time window for delivery {delivery_id}: {str(e)}")
+        
+        # Step 2: Now add unassigned deliveries
+        for _, row in delivery_data.iterrows():
+            delivery_id = row['delivery_id']
+            
+            # Skip if already assigned
+            if delivery_id in assigned_delivery_ids:
+                continue
+                
+            # Extract data for unassigned delivery
+            customer_name = row.get('customer_name', 'Unknown')
+            priority = row.get('priority', 'Medium')
+            time_window = row.get('time_window', '09:00-17:00')
+            weight = row.get('weight_kg', 0)
+            
+            # Extract start and end times from time_window
+            start_time_str, end_time_str = time_window.split('-')
+            
+            # Get delivery date
+            if 'delivery_date' in row:
+                delivery_date = row['delivery_date']
+            else:
+                delivery_date = datetime.now().date()
+            
+            # Create start and end datetime
+            try:
+                # Convert to pandas datetime
+                if isinstance(delivery_date, pd.Timestamp):
+                    date_str = delivery_date.strftime('%Y-%m-%d')
+                elif isinstance(delivery_date, str):
+                    date_str = pd.to_datetime(delivery_date).strftime('%Y-%m-%d')
+                else:
+                    date_str = delivery_date.strftime('%Y-%m-%d')
+                
+                start_datetime = pd.to_datetime(f"{date_str} {start_time_str}")
+                end_datetime = pd.to_datetime(f"{date_str} {end_time_str}")
+                
+                # For unassigned deliveries set color to 'unassigned'
+                calendar_data.append({
+                    'delivery_id': delivery_id,
+                    'customer_name': customer_name,
+                    'vehicle_id': 'Unassigned',
+                    'driver_name': 'N/A',
+                    'vehicle_type': 'N/A',
+                    'priority': priority,
+                    'time_window': time_window,
+                    'estimated_arrival_mins': 0,
+                    'estimated_arrival_time': 'N/A',
+                    'weight_kg': weight,
+                    'Start': start_datetime,
+                    'Finish': end_datetime,
+                    'Task': f"{delivery_id}: {customer_name} (UNASSIGNED)",
+                    'Vehicle Task': 'Unassigned',
+                    'on_time': False,
+                    'assigned': False,
+                    'color': 'unassigned',  # Color for unassigned
+                    'delivery_date': pd.to_datetime(date_str)
+                })
+            except Exception as e:
+                st.warning(f"Could not process time window for unassigned delivery {delivery_id}: {str(e)}")
         
         if calendar_data:
             # Convert to DataFrame
@@ -1013,28 +1129,70 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
                             st.write("#### Delivery Schedule")
                             
                             # Create figure for delivery view
-                            fig_delivery = px.timeline(
+                            fig = px.timeline(
                                 day_data, 
                                 x_start="Start", 
                                 x_end="Finish", 
                                 y="Task",
-                                color="on_time",
-                                color_discrete_map={True: "green", False: "red"},
+                                color="color",  # Use our color column
+                                color_discrete_map={
+                                    "on_time": "green", 
+                                    "late": "orange",
+                                    "unassigned": "red"  # Unassigned deliveries also red
+                                },
                                 hover_data=["customer_name", "vehicle_id", "driver_name", "priority", "time_window", 
-                                           "estimated_arrival_time", "weight_kg"]
+                                           "estimated_arrival_time", "weight_kg", "assigned"]
                             )
                             
+                            # Fix the pattern application code
+                            for i, row in day_data.iterrows():
+                                # Only add diagonal pattern to assigned deliveries
+                                if row['assigned']:
+                                    for trace in fig.data:
+                                        # Find which trace corresponds to this row's color group
+                                        color_value = row['color']
+                                        
+                                        # Look for matching trace
+                                        if trace.name == color_value and any(y == row['Task'] for y in trace.y):
+                                            # Add pattern only to assigned bars
+                                            if 'marker' not in trace:
+                                                trace.marker = dict()
+                                            if 'pattern' not in trace.marker:
+                                                trace.marker.pattern = dict(
+                                                    shape="\\",  # Diagonal lines
+                                                    size=4,
+                                                    solidity=0.5,
+                                                    fgcolor="black"
+                                                )
+                            
+                            # Add status labels to the bars
+                            for idx, row in day_data.iterrows():
+                                status_text = "✓ On-time" if row['on_time'] and row['assigned'] else "⚠ Late" if row['assigned'] else "Not assigned"
+                                position = (row['Start'] + (row['Finish'] - row['Start'])/2)
+                                
+                                # Only add labels to assigned deliveries
+                                if row['assigned']:
+                                    fig.add_annotation(
+                                        x=position,
+                                        y=row['Task'],
+                                        text=status_text,
+                                        showarrow=False,
+                                        font=dict(color="black", size=10),
+                                        xanchor="center"
+                                    )
+                            
                             # Update layout
-                            fig_delivery.update_layout(
+                            fig.update_layout(
                                 title=f"Deliveries by Customer - {date.strftime('%b %d, %Y')}",
                                 xaxis_title="Time of Day",
                                 yaxis_title="Delivery",
                                 height=max(300, 50 * len(day_data)),
-                                yaxis={'categoryorder':'category ascending'}
+                                yaxis={'categoryorder':'category ascending'},
+                                showlegend=False  # Hide the legend as we have custom annotations
                             )
                             
                             # Display figure
-                            st.plotly_chart(fig_delivery, use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True)
                             
                             # Show summary metrics for delivery view
                             col1, col2, col3, col4 = st.columns(4)
