@@ -1,6 +1,38 @@
-# Streamlit Application Template
+# Project: Delivery Route Optimization
 
-This repository contains a template for deploying an open-source Streamlit application. It is designed to help you quickly set up a Streamlit project and enhance your resume with a personal project.
+![Delivery Route Network](img/delivery-route-network.jpg)
+
+This project is a **Delivery Route Optimization** tool built using Streamlit. It aims to optimize delivery routes for a fleet of vehicles while considering constraints such as delivery time windows, vehicle capacity, and traffic conditions.
+
+
+### Key Features
+1. **Route Optimization**:
+   - Solve the **Vehicle Routing Problem (VRP)** to determine the most efficient routes for a fleet of vehicles.
+   - Incorporate constraints like:
+     - Delivery time windows.
+     - Vehicle capacity.
+     - Traffic conditions.
+
+2. **Map Visualization**:
+   - Display optimized routes on an interactive map using **Folium**.
+   - Highlight delivery stops, start and end points, and route distances.
+
+3. **Calendar View**:
+   - Provide a calendar-based schedule for deliveries.
+   - Allow users to view and manage delivery schedules for specific days or weeks.
+
+4. **Real-Time Updates**:
+   - Enable real-time updates for route changes due to unexpected events (e.g., traffic congestion, vehicle breakdowns).
+   - Re-optimize routes dynamically and update the map and calendar views.
+
+### Tools and Technologies
+- **Python**: Core programming language for optimization and application logic.
+- **Google OR-Tools**: Solve the Vehicle Routing Problem (VRP) with constraints.
+- **Streamlit**: Build an interactive web application for route visualization and schedule management.
+- **Folium**: Create interactive maps for route visualization.
+- **Synthetic Data**: Integrate real-time traffic data for dynamic route adjustments.
+
+---
 
 ## Project Structure
 
@@ -17,10 +49,14 @@ streamlit-app-template
 ├── requirements.txt          # List of dependencies for the application
 ├── .streamlit                # Configuration settings for Streamlit
 │   ├── config.toml
+├── img                       # Folder for storing images
+│   └── delivery_route_network.png
 ├── .gitignore                # Files and directories to ignore in Git
 ├── README.md                 # Documentation for the project
 └── LICENSE                   # Licensing information
 ```
+
+---
 
 ## Installation
 
@@ -35,7 +71,8 @@ To get started with this Streamlit application template, follow these steps:
 2. Create a virtual environment (optional but recommended):
    ```
    python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   source venv/bin/activate  # On macOS/Linux
+   venv\Scripts\activate     # On Windows
    ```
 
 3. Install the required dependencies:
@@ -43,16 +80,12 @@ To get started with this Streamlit application template, follow these steps:
    pip install -r requirements.txt
    ```
 
-## Usage
+4. Run the Streamlit application:
+   ```
+   streamlit run src/app.py
+   ```
 
-To run the Streamlit application, use the following command:
-```
-streamlit run src/app.py
-```
-
-## Contributing
-
-Contributions are welcome! If you have suggestions for improvements or new features, feel free to open an issue or submit a pull request.
+---
 
 ## License
 
