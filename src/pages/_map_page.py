@@ -20,19 +20,53 @@ def map_page():
     Use the filters in the sidebar to customize the view.
     """)
 
+    # Initialize session state variables for filters
+    if 'map_filters' not in st.session_state:
+        st.session_state.map_filters = {
+            'selected_dates': ["All"],
+            'priority_filter': [],
+            'status_filter': [],
+            'date_range': [None, None],
+            'show_calendar': True,
+            'show_map': True,
+            'show_data_table': False,
+            'cluster_markers': True
+        }
+    
     # Create filters in sidebar
     with st.sidebar:
         st.header("Map Filters")
         
-        # Show/hide options
-        show_deliveries = st.checkbox("Show Deliveries", value=True)
-        show_depots = st.checkbox("Show Depots", value=True)
+        # Show/hide options - use session state values as defaults
+        show_deliveries = st.checkbox(
+            "Show Deliveries", 
+            value=st.session_state.map_filters.get('show_deliveries', True),
+            key="show_deliveries_checkbox"
+        )
+        st.session_state.map_filters['show_deliveries'] = show_deliveries
+        
+        show_depots = st.checkbox(
+            "Show Depots", 
+            value=st.session_state.map_filters.get('show_depots', True),
+            key="show_depots_checkbox"
+        )
+        st.session_state.map_filters['show_depots'] = show_depots
         
         # Show/hide data table
-        show_data_table = st.checkbox("Show Data Table", value=False)
+        show_data_table = st.checkbox(
+            "Show Data Table", 
+            value=st.session_state.map_filters.get('show_data_table', False),
+            key="show_data_table_checkbox"
+        )
+        st.session_state.map_filters['show_data_table'] = show_data_table
         
         # Choose visualization tabs
-        show_calendar = st.checkbox("Show Calendar View", value=True)
+        show_calendar = st.checkbox(
+            "Show Calendar View", 
+            value=st.session_state.map_filters.get('show_calendar', True),
+            key="show_calendar_checkbox"
+        )
+        st.session_state.map_filters['show_calendar'] = show_calendar
 
     # Try to load data
     try:
@@ -73,8 +107,10 @@ def map_page():
                 selected_priorities = st.multiselect(
                     "Filter by Priority",
                     options=all_priorities,
-                    default=all_priorities  # Default to all selected
+                    default=st.session_state.map_filters.get('priority_filter', all_priorities),
+                    key="priority_multiselect"
                 )
+                st.session_state.map_filters['priority_filter'] = selected_priorities
                 
                 if selected_priorities:
                     delivery_data = delivery_data[delivery_data['priority'].isin(selected_priorities)]
@@ -85,30 +121,61 @@ def map_page():
                 selected_statuses = st.multiselect(
                     "Filter by Status",
                     options=all_statuses,
-                    default=all_statuses  # Default to all selected
+                    default=st.session_state.map_filters.get('status_filter', all_statuses),
+                    key="status_multiselect"
                 )
+                st.session_state.map_filters['status_filter'] = selected_statuses
                 
                 if selected_statuses:
                     delivery_data = delivery_data[delivery_data['status'].isin(selected_statuses)]
         
         if 'delivery_date' in delivery_data.columns:
             with st.sidebar:
-                min_date = delivery_data['delivery_date'].min().date()
-                max_date = delivery_data['delivery_date'].max().date()
+                # Get the min/max dates from the ORIGINAL unfiltered data
+                # Load original data to get proper date range
+                original_data = pd.read_csv(delivery_path)
+                if 'delivery_date' in original_data.columns:
+                    original_data['delivery_date'] = pd.to_datetime(original_data['delivery_date'])
+                    
+                min_date = original_data['delivery_date'].min().date()
+                max_date = original_data['delivery_date'].max().date()
                 
-                # Calculate a default end date that doesn't exceed max_date
-                default_end_date = min(min_date + timedelta(days=7), max_date)
+                # Get saved values from session state
+                saved_start_date = st.session_state.map_filters.get('date_range', [None, None])[0]
+                saved_end_date = st.session_state.map_filters.get('date_range', [None, None])[1]
                 
-                date_range = st.date_input(
-                    "Date Range",
-                    value=(min_date, default_end_date),
-                    min_value=min_date,
-                    max_value=max_date
-                )
+                # Validate saved dates - ensure they're within allowed range
+                if saved_start_date and saved_start_date < min_date:
+                    saved_start_date = min_date
+                if saved_end_date and saved_end_date > max_date:
+                    saved_end_date = max_date
+                    
+                # Set default values with proper validation
+                default_start_date = saved_start_date if saved_start_date else min_date
+                default_end_date = saved_end_date if saved_end_date else min(min_date + timedelta(days=7), max_date)
                 
-                if len(date_range) == 2:
-                    start_date, end_date = date_range
-                    mask = (delivery_data['delivery_date'].dt.date >= start_date) & (delivery_data['delivery_date'].dt.date <= end_date)
+                # Add date range picker
+                try:
+                    date_range = st.date_input(
+                        "Date Range",
+                        value=(default_start_date, default_end_date),
+                        min_value=min_date,
+                        max_value=max_date,
+                        key="date_range_input"
+                    )
+                    
+                    # Update session state with new date range
+                    if len(date_range) == 2:
+                        st.session_state.map_filters['date_range'] = list(date_range)
+                        start_date, end_date = date_range
+                        mask = (delivery_data['delivery_date'].dt.date >= start_date) & (delivery_data['delivery_date'].dt.date <= end_date)
+                        delivery_data = delivery_data[mask]
+                except Exception as e:
+                    # If there's any error with the date range, reset it
+                    st.error(f"Error with date range: {e}")
+                    st.session_state.map_filters['date_range'] = [min_date, max_date]
+                    date_range = (min_date, max_date)
+                    mask = (delivery_data['delivery_date'].dt.date >= min_date) & (delivery_data['delivery_date'].dt.date <= max_date)
                     delivery_data = delivery_data[mask]
                     
         # MOVED STATISTICS TO THE TOP
@@ -249,64 +316,100 @@ def map_page():
             else:
                 calendar_data['Color'] = 'rgb(0, 0, 255)'  # Default blue
             
-            # Group tasks by date for better visualization
-            date_groups = calendar_data.groupby(calendar_data['delivery_date'].dt.date)
+            # Get all available dates and add multi-select filter
+            all_dates = sorted(calendar_data['delivery_date'].dt.date.unique())
+
+            # Format dates for display in the dropdown
+            date_options = {date.strftime('%b %d, %Y'): date for date in all_dates}
+
+            # Get default selection from session state
+            default_selections = st.session_state.map_filters.get('calendar_selected_dates', [])
+
+            # Validate default selections - only keep dates that exist in current options
+            valid_default_selections = [date_str for date_str in default_selections if date_str in date_options.keys()]
+
+            # If no valid selections remain, default to first date (if available)
+            if not valid_default_selections and date_options:
+                valid_default_selections = [list(date_options.keys())[0]]
+
+            # Add multiselect for date filtering with validated defaults
+            selected_date_strings = st.multiselect(
+                "Select dates to display",
+                options=list(date_options.keys()),
+                default=valid_default_selections,
+                key="calendar_date_selector"
+            )
+
+            # Save selections to session state
+            st.session_state.map_filters['calendar_selected_dates'] = selected_date_strings
+
+            # Convert selected strings back to date objects
+            selected_dates = [date_options[date_str] for date_str in selected_date_strings]
             
-            # Create tabs for each date - UPDATED FORMAT TO MMM DD, YYYY
-            date_tabs = st.tabs([date.strftime('%b %d, %Y') for date in sorted(date_groups.groups.keys())])
-            
-            for i, (date, tab) in enumerate(zip(sorted(date_groups.groups.keys()), date_tabs)):
-                with tab:
-                    # Filter data for this date
-                    day_data = calendar_data[calendar_data['delivery_date'].dt.date == date]
-                    
-                    if len(day_data) > 0:
-                        # Create figure
-                        fig = px.timeline(
-                            day_data, 
-                            x_start="Start", 
-                            x_end="Finish", 
-                            y="Task",
-                            color="priority" if 'priority' in day_data.columns else None,
-                            color_discrete_map={"High": "red", "Medium": "orange", "Low": "blue"},
-                            hover_data=["customer_name", "address", "weight_kg", "status"]
-                        )
+            if not selected_dates:
+                st.info("Please select at least one date to view the delivery schedule.")
+            else:
+                # Filter calendar data to only include selected dates
+                filtered_calendar = calendar_data[calendar_data['delivery_date'].dt.date.isin(selected_dates)]
+                
+                # Group tasks by date for better visualization
+                date_groups = filtered_calendar.groupby(filtered_calendar['delivery_date'].dt.date)
+                
+                # Create tabs only for the selected dates
+                date_tabs = st.tabs([date.strftime('%b %d, %Y') for date in selected_dates])
+                
+                for i, (date, tab) in enumerate(zip(selected_dates, date_tabs)):
+                    with tab:
+                        # Filter data for this date
+                        day_data = filtered_calendar[filtered_calendar['delivery_date'].dt.date == date]
                         
-                        # Update layout
-                        fig.update_layout(
-                            title=f"Deliveries scheduled for {date.strftime('%b %d, %Y')}",
-                            xaxis_title="Time of Day",
-                            yaxis_title="Delivery",
-                            height=max(300, 50 * len(day_data)),
-                            yaxis={'categoryorder':'category ascending'}
-                        )
-                        
-                        # Display figure
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Show summary
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Total Deliveries", len(day_data))
-                        with col2:
-                            if 'weight_kg' in day_data.columns:
-                                st.metric("Total Weight", f"{day_data['weight_kg'].sum():.2f} kg")
-                        with col3:
-                            if 'priority' in day_data.columns and 'High' in day_data['priority'].values:
-                                st.metric("High Priority", len(day_data[day_data['priority'] == 'High']))
-                        
-                        # NEW - Add delivery status breakdown for this day
-                        if 'status' in day_data.columns:
-                            st.write("##### Deliveries by Status")
-                            status_counts = day_data['status'].value_counts()
-                            status_cols = st.columns(min(4, len(status_counts)))
+                        if len(day_data) > 0:
+                            # Create figure
+                            fig = px.timeline(
+                                day_data, 
+                                x_start="Start", 
+                                x_end="Finish", 
+                                y="Task",
+                                color="priority" if 'priority' in day_data.columns else None,
+                                color_discrete_map={"High": "red", "Medium": "orange", "Low": "blue"},
+                                hover_data=["customer_name", "address", "weight_kg", "status"]
+                            )
                             
-                            for i, (status, count) in enumerate(status_counts.items()):
-                                col_idx = i % len(status_cols)
-                                with status_cols[col_idx]:
-                                    st.metric(status, count)
-                    else:
-                        st.info(f"No deliveries scheduled for {date.strftime('%b %d, %Y')}")
+                            # Update layout
+                            fig.update_layout(
+                                title=f"Deliveries scheduled for {date.strftime('%b %d, %Y')}",
+                                xaxis_title="Time of Day",
+                                yaxis_title="Delivery",
+                                height=max(300, 50 * len(day_data)),
+                                yaxis={'categoryorder':'category ascending'}
+                            )
+                            
+                            # Display figure
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Show summary
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Total Deliveries", len(day_data))
+                            with col2:
+                                if 'weight_kg' in day_data.columns:
+                                    st.metric("Total Weight", f"{day_data['weight_kg'].sum():.2f} kg")
+                            with col3:
+                                if 'priority' in day_data.columns and 'High' in day_data['priority'].values:
+                                    st.metric("High Priority", len(day_data[day_data['priority'] == 'High']))
+                            
+                            # NEW - Add delivery status breakdown for this day
+                            if 'status' in day_data.columns:
+                                st.write("##### Deliveries by Status")
+                                status_counts = day_data['status'].value_counts()
+                                status_cols = st.columns(min(4, len(status_counts)))
+                                
+                                for i, (status, count) in enumerate(status_counts.items()):
+                                    col_idx = i % len(status_cols)
+                                    with status_cols[col_idx]:
+                                        st.metric(status, count)
+                        else:
+                            st.info(f"No deliveries scheduled for {date.strftime('%b %d, %Y')}")
         
         # Display raw data table if selected
         if show_data_table:

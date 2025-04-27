@@ -16,11 +16,33 @@ from folium.features import DivIcon
 import requests
 import plotly.express as px
 
+def clear_optimization_results():
+    """Clear optimization results when parameters change"""
+    if 'optimization_result' in st.session_state:
+        st.session_state.optimization_result = None
+
 def optimize_page():
     """
     Render the optimization page with controls for route optimization
     """
     st.title("Delivery Route Optimization")
+    
+    # Initialize session state variables
+    if 'optimization_result' not in st.session_state:
+        st.session_state.optimization_result = None
+    if 'optimization_params' not in st.session_state:
+        st.session_state.optimization_params = {
+            'priority_weight': 0.3,
+            'time_window_weight': 0.5,
+            'balance_weight': 0.2,
+            'max_vehicles': 5,
+            'selected_dates': ["All"]
+        }
+    if 'calendar_display_dates' not in st.session_state:
+        st.session_state.calendar_display_dates = None
+    # Add this new session state variable to store calculated road routes
+    if 'calculated_road_routes' not in st.session_state:
+        st.session_state.calculated_road_routes = {}
     
     # Load data
     data = load_all_data()
@@ -36,12 +58,22 @@ def optimize_page():
     if 'delivery_date' in delivery_data.columns:
         available_dates = sorted(delivery_data['delivery_date'].unique())
         date_options = ["All"] + list(available_dates)
+        
+        # Store current value before selection
+        current_selected_dates = st.session_state.optimization_params['selected_dates']
+        
         selected_dates = st.sidebar.multiselect(
             "Select Delivery Dates",
             options=date_options,
-            default=["All"]  # Default to "All"
+            default=current_selected_dates,
+            key="delivery_date_selector"
         )
         
+        # Check if selection changed
+        if selected_dates != current_selected_dates:
+            clear_optimization_results()
+            st.session_state.optimization_params['selected_dates'] = selected_dates
+            
         # Handle filtering based on selection
         if "All" not in selected_dates:
             if selected_dates:  # If specific dates were selected
@@ -52,40 +84,62 @@ def optimize_page():
         # If "All" is selected, keep all dates - no filtering needed
     
     # Priority weighting
+    current_priority = st.session_state.optimization_params['priority_weight']
     priority_weight = st.sidebar.slider(
         "Priority Importance",
         min_value=0.0,
         max_value=1.0,
-        value=0.3,
-        help="Higher values give more importance to high-priority deliveries"
+        value=current_priority,
+        help="Higher values give more importance to high-priority deliveries",
+        key="priority_weight",
+        on_change=clear_optimization_results
     )
-    
+
     # Time window importance
+    current_time_window = st.session_state.optimization_params['time_window_weight']
     time_window_weight = st.sidebar.slider(
         "Time Window Importance",
         min_value=0.0,
         max_value=1.0,
-        value=0.5,
-        help="Higher values enforce stricter adherence to delivery time windows"
+        value=current_time_window,
+        help="Higher values enforce stricter adherence to delivery time windows",
+        key="time_window_weight",
+        on_change=clear_optimization_results
     )
-    
+
     # Distance vs load balancing
+    current_balance = st.session_state.optimization_params['balance_weight']
     balance_weight = st.sidebar.slider(
         "Load Balancing vs Distance",
         min_value=0.0,
         max_value=1.0,
-        value=0.2,
-        help="Higher values prioritize even distribution of deliveries across vehicles over total distance"
+        value=current_balance,
+        help="Higher values prioritize even distribution of deliveries across vehicles over total distance",
+        key="balance_weight",
+        on_change=clear_optimization_results
     )
-    
+
     # Max vehicles to use
     available_vehicles = vehicle_data[vehicle_data['status'] == 'Available']
+    current_max_vehicles = st.session_state.optimization_params['max_vehicles']
     max_vehicles = st.sidebar.slider(
         "Maximum Vehicles to Use",
         min_value=1,
         max_value=len(available_vehicles),
-        value=min(5, len(available_vehicles))
+        value=min(current_max_vehicles, len(available_vehicles)),
+        key="max_vehicles",
+        on_change=clear_optimization_results
     )
+
+    # Update session state with new parameter values
+    st.session_state.optimization_params['priority_weight'] = priority_weight
+    st.session_state.optimization_params['time_window_weight'] = time_window_weight
+    st.session_state.optimization_params['balance_weight'] = balance_weight
+    st.session_state.optimization_params['max_vehicles'] = max_vehicles
+
+    # # Add a notification when parameters have changed and results need regenerating
+    # if ('optimization_result' not in st.session_state or st.session_state.optimization_result is None):
+    #     st.warning("⚠️ Optimization parameters have changed. Please click 'Generate Optimal Routes' to update results.")
     
     # Main optimization section
     col1, col2 = st.columns([2, 1])
@@ -122,34 +176,45 @@ def optimize_page():
                     st.success("✅ Sufficient vehicle capacity")
     
     # Run optimization button
-    if st.button("Generate Optimal Routes"):
-        with st.spinner("Calculating optimal routes..."):
-            start_time = time.time()
+    run_optimization_btn = st.button("Generate Optimal Routes")
+    
+    # Check if we should display results (either have results in session or button was clicked)
+    if run_optimization_btn or st.session_state.optimization_result is not None:
+        if run_optimization_btn:
+            # Run new optimization
+            with st.spinner("Calculating optimal routes..."):
+                start_time = time.time()
+                
+                # Prepare data for optimization
+                optimization_result = run_optimization(
+                    delivery_data=delivery_data,
+                    vehicle_data=available_vehicles.iloc[:max_vehicles],
+                    distance_matrix=distance_matrix,
+                    time_matrix=time_matrix,
+                    locations=locations,
+                    priority_weight=priority_weight,
+                    time_window_weight=time_window_weight,
+                    balance_weight=balance_weight
+                )
+                
+                end_time = time.time()
+                st.success(f"Optimization completed in {end_time - start_time:.2f} seconds")
+                
+                # Store results in session state
+                st.session_state.optimization_result = optimization_result
+        else:
+            # Use existing results
+            optimization_result = st.session_state.optimization_result
             
-            # Prepare data for optimization
-            optimization_result = run_optimization(
-                delivery_data=delivery_data,
-                vehicle_data=available_vehicles.iloc[:max_vehicles],
-                distance_matrix=distance_matrix,
-                time_matrix=time_matrix,
-                locations=locations,
-                priority_weight=priority_weight,
-                time_window_weight=time_window_weight,
-                balance_weight=balance_weight
-            )
-            
-            end_time = time.time()
-            st.success(f"Optimization completed in {end_time - start_time:.2f} seconds")
-            
-            # Display results
-            display_optimization_results(
-                optimization_result=optimization_result,
-                delivery_data=delivery_data,
-                vehicle_data=available_vehicles.iloc[:max_vehicles],
-                distance_matrix=distance_matrix,
-                time_matrix=time_matrix,
-                locations=locations
-            )
+        # Display results
+        display_optimization_results(
+            optimization_result=optimization_result,
+            delivery_data=delivery_data,
+            vehicle_data=available_vehicles.iloc[:max_vehicles],
+            distance_matrix=distance_matrix,
+            time_matrix=time_matrix,
+            locations=locations
+        )
 
 def load_all_data():
     """
@@ -639,15 +704,23 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
         'darkred', 'lightblue', 'darkgreen', 'cadetblue', 'darkpurple'
     ]
     
+    # Create a unique key for this optimization result to use in session state
+    optimization_key = hash(str(optimization_result))
+
+    # Check if we have stored routes for this optimization result
+    if optimization_key not in st.session_state.calculated_road_routes:
+        # Initialize storage for this optimization
+        st.session_state.calculated_road_routes[optimization_key] = {}
+
     # Count total route segments for progress bar
     total_segments = sum(len(route) + 1 for route in routes.values() if route)  # +1 for return to depot
     route_progress = st.progress(0)
     progress_container = st.empty()
     progress_container.text("Calculating routes: 0%")
-    
+
     # Counter for processed segments
     processed_segments = 0
-    
+
     for i, (vehicle_id, route) in enumerate(routes.items()):
         if not route:
             continue
@@ -740,52 +813,69 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
             start_point = waypoints[k]
             end_point = waypoints[k+1]
             
+            # Create a key for this route segment
+            route_key = f"{vehicle_id}_{k}"
+            
             # Update progress text
             segment_desc = "depot" if k == 0 else f"stop {k}"
             next_desc = f"stop {k+1}" if k < len(waypoints) - 2 else "depot"
-            progress_text = f"Calculating route for Vehicle {vehicle_id}: {segment_desc} → {next_desc}"
             
-            # Use spinner context with progress updates
-            with st.spinner(progress_text):
-                # Get a road-like route between these points
-                road_route = get_road_route(start_point, end_point)
+            # Check if we have already calculated this route
+            if route_key in st.session_state.calculated_road_routes[optimization_key]:
+                # Use stored route
+                road_route = st.session_state.calculated_road_routes[optimization_key][route_key]
+                progress_text = f"Using stored route for Vehicle {vehicle_id}: {segment_desc} → {next_desc}"
+            else:
+                # Calculate and store new route
+                progress_text = f"Calculating route for Vehicle {vehicle_id}: {segment_desc} → {next_desc}"
+                with st.spinner(progress_text):
+                    # Get a road-like route between these points
+                    road_route = get_road_route(start_point, end_point)
+                    # Store for future use
+                    st.session_state.calculated_road_routes[optimization_key][route_key] = road_route
+            
+            # Add the route line (non-animated)
+            folium.PolyLine(
+                road_route,
+                color=color,
+                weight=4,
+                opacity=0.8,
+                tooltip=f"Route {vehicle_id}: {segment_desc} → {next_desc}"
+            ).add_to(m)
+            
+            # Add direction arrow
+            idx = int(len(road_route) * 0.7)
+            if idx < len(road_route) - 1:
+                p1 = road_route[idx]
+                p2 = road_route[idx + 1]
                 
-                # Add the route line (non-animated)
-                folium.PolyLine(
-                    road_route,
+                # Calculate direction angle
+                dy = p2[0] - p1[0]
+                dx = p2[1] - p1[1]
+                angle = (90 - np.degrees(np.arctan2(dy, dx))) % 360
+                
+                # Add arrow marker
+                folium.RegularPolygonMarker(
+                    location=p1,
+                    number_of_sides=3,
+                    radius=8,
+                    rotation=angle,
                     color=color,
-                    weight=4,
-                    opacity=0.8,
-                    tooltip=f"Route {vehicle_id}: {segment_desc} → {next_desc}"
+                    fill_color=color,
+                    fill_opacity=0.8
                 ).add_to(m)
-                
-                # Add direction arrow
-                idx = int(len(road_route) * 0.7)
-                if idx < len(road_route) - 1:
-                    p1 = road_route[idx]
-                    p2 = road_route[idx + 1]
-                    
-                    # Calculate direction angle
-                    dy = p2[0] - p1[0]
-                    dx = p2[1] - p1[1]
-                    angle = (90 - np.degrees(np.arctan2(dy, dx))) % 360
-                    
-                    # Add arrow marker
-                    folium.RegularPolygonMarker(
-                        location=p1,
-                        number_of_sides=3,
-                        radius=8,
-                        rotation=angle,
-                        color=color,
-                        fill_color=color,
-                        fill_opacity=0.8
-                    ).add_to(m)
             
             # Update progress after each segment
             processed_segments += 1
             progress_percentage = int((processed_segments / total_segments) * 100)
             route_progress.progress(processed_segments / total_segments)
             progress_container.text(f"Calculating routes: {progress_percentage}%")
+
+    # Add a message to show when using cached routes
+    if optimization_key in st.session_state.calculated_road_routes:
+        cached_count = len(st.session_state.calculated_road_routes[optimization_key])
+        if cached_count > 0 and cached_count >= processed_segments:
+            st.info(f"✅ Using {cached_count} previously calculated routes. No recalculation needed.")
     
     # Clear progress display when done
     progress_container.empty()
@@ -796,10 +886,10 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
     folium_static(m, width=800, height=600)
     
     # -----------------------------------------------------
-    # Delivery Schedule Calendar Section
+    # Unified Schedule Calendar Section
     # -----------------------------------------------------
-    st.subheader("Delivery Schedule Calendar")
-    st.write("This calendar shows the planned delivery schedule, with on-time deliveries in green and late deliveries in red.")
+    st.subheader("Schedule Calendar View")
+    st.write("This calendar shows both delivery schedules and vehicle assignments. On-time deliveries are shown in green, late deliveries in red.")
 
     # Process data for calendar view
     if routes:
@@ -863,6 +953,7 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
                         'Start': start_datetime,
                         'Finish': end_datetime,
                         'Task': f"{delivery_id}: {customer_name}",
+                        'Vehicle Task': f"{vehicle_id}: {driver_name}",
                         'on_time': on_time,
                         'delivery_date': pd.to_datetime(date_str)
                     })
@@ -876,214 +967,174 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
             # Create color mapping for on-time status
             cal_df['Color'] = cal_df['on_time'].map({True: 'rgb(0, 200, 0)', False: 'rgb(255, 0, 0)'})
             
-            # Group tasks by date for visualization
-            date_groups = cal_df.groupby(cal_df['delivery_date'].dt.date)
+            # Get all available dates 
+            all_dates = sorted(cal_df['delivery_date'].dt.date.unique())
             
-            # Create tabs for each date
-            date_tabs = st.tabs([date.strftime('%b %d, %Y') for date in sorted(date_groups.groups.keys())])
+            # Format dates for display in the dropdown
+            date_options = {date.strftime('%b %d, %Y'): date for date in all_dates}
             
-            for i, (date, tab) in enumerate(zip(sorted(date_groups.groups.keys()), date_tabs)):
-                with tab:
-                    # Filter data for this date
-                    day_data = cal_df[cal_df['delivery_date'].dt.date == date]
-                    
-                    if len(day_data) > 0:
-                        # Create figure
-                        fig = px.timeline(
-                            day_data, 
-                            x_start="Start", 
-                            x_end="Finish", 
-                            y="Task",
-                            color="on_time",
-                            color_discrete_map={True: "green", False: "red"},
-                            hover_data=["customer_name", "vehicle_id", "driver_name", "priority", "time_window", 
-                                       "estimated_arrival_time", "weight_kg"]
-                        )
+            # Initialize calendar display dates if not already set or if dates have changed
+            available_date_keys = list(date_options.keys())
+            
+            # Default to all dates
+            if st.session_state.calendar_display_dates is None or not all(date in available_date_keys for date in st.session_state.calendar_display_dates):
+                st.session_state.calendar_display_dates = available_date_keys
+            
+            # Add multiselect for date filtering with session state
+            selected_date_strings = st.multiselect(
+                "Select dates to display",
+                options=available_date_keys,
+                default=st.session_state.calendar_display_dates,
+                key="calendar_date_selector"
+            )
+            
+            # Update the session state
+            st.session_state.calendar_display_dates = selected_date_strings
+            
+            # Convert selected strings back to date objects
+            selected_dates = [date_options[date_str] for date_str in selected_date_strings]
+            
+            if not selected_dates:
+                st.info("Please select at least one date to view the delivery schedule.")
+            else:
+                # Filter calendar data to only include selected dates
+                filtered_cal_df = cal_df[cal_df['delivery_date'].dt.date.isin(selected_dates)]
+                
+                # Create tabs only for the selected dates
+                date_tabs = st.tabs([date.strftime('%b %d, %Y') for date in selected_dates])
+                
+                for i, (date, tab) in enumerate(zip(selected_dates, date_tabs)):
+                    with tab:
+                        # Filter data for this date
+                        day_data = filtered_cal_df[filtered_cal_df['delivery_date'].dt.date == date]
                         
-                        # Update layout
-                        fig.update_layout(
-                            title=f"Deliveries scheduled for {date.strftime('%b %d, %Y')}",
-                            xaxis_title="Time of Day",
-                            yaxis_title="Delivery",
-                            height=max(300, 50 * len(day_data)),
-                            yaxis={'categoryorder':'category ascending'}
-                        )
-                        
-                        # Display figure
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Show summary
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Total Deliveries", len(day_data))
-                        with col2:
-                            st.metric("On-Time Deliveries", len(day_data[day_data['on_time']]))
-                        with col3:
-                            st.metric("Late Deliveries", len(day_data[~day_data['on_time']]))
-                        with col4:
-                            if 'weight_kg' in day_data.columns:
-                                st.metric("Total Weight", f"{day_data['weight_kg'].sum():.2f} kg")
-                        
-                        # Add breakdown of deliveries by priority
-                        if 'priority' in day_data.columns:
-                            st.write("##### Deliveries by Priority")
-                            priority_counts = day_data['priority'].value_counts()
-                            priority_cols = st.columns(min(4, len(priority_counts)))
+                        if len(day_data) > 0:
+                            # FIRST SECTION: DELIVERY SCHEDULE VIEW
+                            st.write("#### Delivery Schedule")
                             
-                            for i, (priority, count) in enumerate(priority_counts.items()):
-                                col_idx = i % len(priority_cols)
-                                with priority_cols[col_idx]:
-                                    st.metric(priority, count)
-                    else:
-                        st.info(f"No deliveries scheduled for {date.strftime('%b %d, %Y')}")
+                            # Create figure for delivery view
+                            fig_delivery = px.timeline(
+                                day_data, 
+                                x_start="Start", 
+                                x_end="Finish", 
+                                y="Task",
+                                color="on_time",
+                                color_discrete_map={True: "green", False: "red"},
+                                hover_data=["customer_name", "vehicle_id", "driver_name", "priority", "time_window", 
+                                           "estimated_arrival_time", "weight_kg"]
+                            )
+                            
+                            # Update layout
+                            fig_delivery.update_layout(
+                                title=f"Deliveries by Customer - {date.strftime('%b %d, %Y')}",
+                                xaxis_title="Time of Day",
+                                yaxis_title="Delivery",
+                                height=max(300, 50 * len(day_data)),
+                                yaxis={'categoryorder':'category ascending'}
+                            )
+                            
+                            # Display figure
+                            st.plotly_chart(fig_delivery, use_container_width=True)
+                            
+                            # Show summary metrics for delivery view
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Total Deliveries", len(day_data))
+                            with col2:
+                                st.metric("On-Time Deliveries", len(day_data[day_data['on_time']]))
+                            with col3:
+                                st.metric("Late Deliveries", len(day_data[~day_data['on_time']]))
+                            with col4:
+                                if 'weight_kg' in day_data.columns:
+                                    st.metric("Total Weight", f"{day_data['weight_kg'].sum():.2f} kg")
+                            
+                            # Add breakdown of deliveries by priority
+                            if 'priority' in day_data.columns:
+                                st.write("##### Deliveries by Priority")
+                                priority_counts = day_data['priority'].value_counts()
+                                priority_cols = st.columns(min(4, len(priority_counts)))
+                                
+                                for j, (priority, count) in enumerate(priority_counts.items()):
+                                    col_idx = j % len(priority_cols)
+                                    with priority_cols[col_idx]:
+                                        st.metric(priority, count)
+                            
+                            # SECOND SECTION: VEHICLE SCHEDULE VIEW
+                            st.write("#### Vehicle Schedule")
+                            
+                            # Create figure grouped by vehicle
+                            fig_vehicle = px.timeline(
+                                day_data, 
+                                x_start="Start", 
+                                x_end="Finish", 
+                                y="Vehicle Task",
+                                color="on_time",
+                                color_discrete_map={True: "green", False: "red"},
+                                hover_data=["delivery_id", "customer_name", "priority", "time_window", 
+                                           "estimated_arrival_time", "weight_kg"]
+                            )
+                            
+                            # Add labels for each delivery to the bars
+                            for idx, row in day_data.iterrows():
+                                fig_vehicle.add_annotation(
+                                    x=(row['Start'] + (row['Finish'] - row['Start'])/2),
+                                    y=row['Vehicle Task'],
+                                    text=f"#{row['delivery_id']}",
+                                    showarrow=False,
+                                    font=dict(size=10, color="black")
+                                )
+                            
+                            # Update layout
+                            fig_vehicle.update_layout(
+                                title=f"Vehicle Assignment Schedule - {date.strftime('%b %d, %Y')}",
+                                xaxis_title="Time of Day",
+                                yaxis_title="Vehicle",
+                                height=max(300, 70 * day_data['Vehicle Task'].nunique()),
+                                yaxis={'categoryorder':'category ascending'}
+                            )
+                            
+                            # Display figure for vehicle view
+                            st.plotly_chart(fig_vehicle, use_container_width=True)
+                            
+                            # Show vehicle utilization summary
+                            st.write("##### Vehicle Utilization")
+                            
+                            # Calculate vehicle utilization metrics
+                            vehicle_metrics = []
+                            for vehicle_id in day_data['vehicle_id'].unique():
+                                vehicle_deliveries = day_data[day_data['vehicle_id'] == vehicle_id]
+                                
+                                # Calculate total delivery time for this vehicle
+                                total_mins = sum((row['Finish'] - row['Start']).total_seconds() / 60 for _, row in vehicle_deliveries.iterrows())
+                                
+                                # Count on-time deliveries
+                                on_time_count = len(vehicle_deliveries[vehicle_deliveries['on_time'] == True])
+                                
+                                # Get the driver name
+                                driver_name = vehicle_deliveries['driver_name'].iloc[0] if not vehicle_deliveries.empty else "Unknown"
+                                
+                                vehicle_metrics.append({
+                                    'vehicle_id': vehicle_id,
+                                    'driver_name': driver_name,
+                                    'deliveries': len(vehicle_deliveries),
+                                    'delivery_time_mins': total_mins,
+                                    'on_time_deliveries': on_time_count,
+                                    'on_time_percentage': (on_time_count / len(vehicle_deliveries)) * 100 if len(vehicle_deliveries) > 0 else 0
+                                })
+                            
+                            # Display metrics in a nice format
+                            metrics_df = pd.DataFrame(vehicle_metrics)
+                            
+                            # Show as a table
+                            st.dataframe(metrics_df.style.format({
+                                'delivery_time_mins': '{:.0f}',
+                                'on_time_percentage': '{:.1f}%'
+                            }))
+                            
+                        else:
+                            st.info(f"No deliveries scheduled for {date.strftime('%b %d, %Y')}")
         else:
-            st.info("No delivery calendar data available. Please generate routes first.")
-
-    # -----------------------------------------------------
-    # Vehicle Schedule Calendar Section
-    # -----------------------------------------------------
-    st.subheader("Vehicle Schedule Calendar")
-    st.write("This calendar shows the schedule for each vehicle, helping visualize their workload throughout the day.")
-
-    # Process data for vehicle calendar view (same data, different grouping)
-    if routes and calendar_data:
-        # Convert list to DataFrame if needed
-        if not isinstance(calendar_data, pd.DataFrame):
-            vehicle_cal_df = pd.DataFrame(calendar_data)
-        else:
-            vehicle_cal_df = calendar_data.copy()
-        
-        # Create a new Task column based on vehicle ID
-        vehicle_cal_df['Vehicle Task'] = vehicle_cal_df['vehicle_id'] + ': ' + vehicle_cal_df['driver_name']
-        
-        # Group by date
-        date_groups = vehicle_cal_df.groupby(vehicle_cal_df['delivery_date'].dt.date)
-        
-        # Create tabs for each date
-        date_tabs = st.tabs([date.strftime('%b %d, %Y') for date in sorted(date_groups.groups.keys())])
-        
-        for i, (date, tab) in enumerate(zip(sorted(date_groups.groups.keys()), date_tabs)):
-            with tab:
-                # Filter data for this date
-                day_data = vehicle_cal_df[vehicle_cal_df['delivery_date'].dt.date == date]
-                
-                if len(day_data) > 0:
-                    # Create figure grouped by vehicle
-                    fig = px.timeline(
-                        day_data, 
-                        x_start="Start", 
-                        x_end="Finish", 
-                        y="Vehicle Task",
-                        color="on_time",
-                        color_discrete_map={True: "green", False: "red"},
-                        hover_data=["delivery_id", "customer_name", "priority", "time_window", 
-                                   "estimated_arrival_time", "weight_kg"]
-                    )
-                    
-                    # Add labels for each delivery to the bars
-                    for idx, row in day_data.iterrows():
-                        fig.add_annotation(
-                            x=(row['Start'] + (row['Finish'] - row['Start'])/2),
-                            y=row['Vehicle Task'],
-                            text=f"#{row['delivery_id']}",
-                            showarrow=False,
-                            font=dict(size=10, color="black")
-                        )
-                    
-                    # Update layout
-                    fig.update_layout(
-                        title=f"Vehicle schedule for {date.strftime('%b %d, %Y')}",
-                        xaxis_title="Time of Day",
-                        yaxis_title="Vehicle",
-                        height=max(300, 70 * day_data['Vehicle Task'].nunique()),
-                        yaxis={'categoryorder':'category ascending'}
-                    )
-                    
-                    # Display figure
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                else:
-                    st.info(f"No vehicle schedules for {date.strftime('%b %d, %Y')}")
-    else:
-        st.info("No vehicle schedule data available. Please generate routes first.")
-    
-    # Display detailed route information
-    st.subheader("Route Details")
-    
-    # Create tabs for each route
-    if not routes:
-        st.warning("No routes were created. Try adjusting the optimization parameters.")
-    else:
-        tabs = st.tabs([f"Vehicle {vid}" for vid in routes.keys() if routes[vid]])
-        
-        for i, (vehicle_id, route) in enumerate([(vid, r) for vid, r in routes.items() if r]):
-            with tabs[i]:
-                if not route:
-                    st.info(f"No deliveries assigned to vehicle {vehicle_id}")
-                    continue
-                    
-                # Get vehicle info
-                vehicle_info = vehicle_data[vehicle_data['vehicle_id'] == vehicle_id].iloc[0]
-                
-                # Display vehicle details
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Vehicle", vehicle_id)
-                    
-                with col2:
-                    st.metric("Driver", vehicle_info.get('driver_name', 'Unknown'))
-                    
-                with col3:
-                    st.metric("Total Deliveries", len(route))
-                
-                # Display statistics from route_stats if available
-                stats = optimization_result.get('stats', {}).get(vehicle_id, {})
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    distance = stats.get('total_distance_km', 'N/A')
-                    st.metric("Total Distance", f"{distance} km" if isinstance(distance, (int, float)) else distance)
-                    
-                with col2:
-                    time_mins = stats.get('estimated_time_mins', 'N/A')
-                    st.metric("Estimated Time", f"{time_mins} mins" if isinstance(time_mins, (int, float)) else time_mins)
-                
-                # Display the route as a table
-                st.write("#### Delivery Sequence")
-                
-                # Create route data for table
-                route_data = []
-                for j, delivery in enumerate(route):
-                    delivery_id = delivery['id']  # FIXED: Use 'id' instead of 'delivery_id'
-                    
-                    # Find more details from the original data
-                    matching_rows = delivery_data[delivery_data['delivery_id'] == delivery_id]
-                    if not matching_rows.empty:
-                        delivery_details = matching_rows.iloc[0]
-                        
-                        route_data.append({
-                            'Stop': j + 1,
-                            'Delivery ID': delivery_id,
-                            'Customer': delivery_details.get('customer_name', delivery.get('customer_name', 'Unknown')),
-                            'Priority': delivery_details.get('priority', delivery.get('priority', 'Medium')),
-                            'Time Window': delivery_details.get('time_window', delivery.get('time_window', '09:00-17:00')),
-                            'Weight (kg)': round(delivery_details.get('weight_kg', delivery.get('weight_kg', 0)), 2)
-                        })
-                    else:
-                        # If not found in original data, use the data from the delivery object
-                        route_data.append({
-                            'Stop': j + 1,
-                            'Delivery ID': delivery_id,
-                            'Customer': delivery.get('customer_name', 'Unknown'),
-                            'Priority': delivery.get('priority', 'Medium'),
-                            'Time Window': delivery.get('time_window', '09:00-17:00'),
-                            'Weight (kg)': round(delivery.get('weight_kg', 0), 2)
-                        })
-                
-                # Convert to DataFrame for display
-                route_df = pd.DataFrame(route_data)
-                st.dataframe(route_df)
+            st.info("No calendar data available. Please generate routes first.")
 
 def create_distance_matrix(locations):
     """
