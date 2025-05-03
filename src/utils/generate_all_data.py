@@ -17,13 +17,13 @@ def create_data_directory():
     tuple of (str, str, str)
         Paths to time matrix directory, vehicle data directory, and delivery data directory    
     """
-    vehicle_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'vehicle_data')
+    vehicle_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'vehicle-data')
     os.makedirs(vehicle_data_dir, exist_ok=True)
 
-    delivery_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'delivery_data')
+    delivery_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'delivery-data')
     os.makedirs(delivery_data_dir, exist_ok=True)
 
-    time_matrix_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'time_matrix')
+    time_matrix_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'time-matrix')
     os.makedirs(time_matrix_data_dir, exist_ok=True)
     return time_matrix_data_dir, vehicle_data_dir, delivery_data_dir
 
