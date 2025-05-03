@@ -20,6 +20,73 @@ def map_page():
     Use the filters in the sidebar to customize the view.
     """)
 
+
+    # Add help section with expander
+    with st.expander("📚 How to Use the Map Pageß"):
+        st.markdown("""
+        ## Step-by-Step Guide to the Map Page
+        
+        The Map page provides an interactive visualization of all delivery locations and vehicle depots. It helps you understand delivery distribution, monitor delivery status, and plan logistics operations.
+        
+        ### 1. Map Navigation
+        
+        - **Pan**: Click and drag to move around the map
+        - **Zoom**: Use the scroll wheel or the +/- buttons in the top-left corner
+        - **View Details**: Click on any marker to see detailed information about that delivery or depot
+        
+        ### 2. Using Map Filters (Sidebar)
+        
+        - **Show/Hide Elements**:
+          - Toggle "Show Deliveries" to display or hide delivery markers
+          - Toggle "Show Depots" to display or hide vehicle depot markers
+          - Enable "Show Data Table" to view raw delivery data below the map
+          - Enable "Show Calendar View" to see delivery schedules organized by date
+        
+        - **Filter by Attributes**:
+          - Use "Filter by Priority" to show only deliveries of selected priority levels (High, Medium, Low)
+          - Use "Filter by Status" to show only deliveries with selected statuses (Pending, In Transit, Delivered)
+        
+        - **Date Filtering**:
+          - Use the "Date Range" selector to focus on deliveries within specific dates
+          - This affects both the map display and the calendar view
+        
+        ### 3. Understanding the Map Markers
+        
+        - **Delivery Markers**:
+          - Red markers: High priority deliveries
+          - Orange markers: Medium priority deliveries
+          - Blue markers: Low priority deliveries
+        
+        - **Depot Markers**:
+          - Green house icons: Vehicle depot locations
+        
+        ### 4. Using the Calendar View
+        
+        - Select specific dates from the dropdown to view scheduled deliveries
+        - Each tab shows deliveries for one selected date
+        - Timeline bars are color-coded by priority (red=High, orange=Medium, blue=Low)
+        - Hover over timeline bars to see detailed delivery information
+        - Check the summary metrics below each calendar for quick insights
+        
+        ### 5. Reading the Delivery Statistics
+        
+        - The top section shows key metrics about displayed deliveries:
+          - Total number of deliveries shown
+          - Total weight of all displayed deliveries
+          - Number of pending deliveries
+          - Breakdown of deliveries by status
+        
+        ### 6. Data Table Features
+        
+        When "Show Data Table" is enabled:
+        - Green highlighted rows: Completed deliveries
+        - Red highlighted rows: Urgent high-priority deliveries due within the next week
+        - Sort any column by clicking the column header
+        - Search across all fields using the search box
+        
+        This map view helps you visualize your delivery operations geographically while the calendar provides a time-based perspective of your delivery schedule.
+        """)
+    
     # Initialize session state variables for filters
     if 'map_filters' not in st.session_state:
         st.session_state.map_filters = {

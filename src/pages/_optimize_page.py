@@ -26,6 +26,52 @@ def optimize_page():
     Render the optimization page with controls for route optimization
     """
     st.title("Delivery Route Optimization")
+
+    # Add help section with expander
+    with st.expander("📚 How to Use This Page"):
+        st.markdown("""
+        ## Step-by-Step Guide to Route Optimization
+        
+        This application helps you optimize delivery routes by assigning deliveries to vehicles in the most efficient way possible. Follow these steps to get started:
+        
+        ### 1. Set Optimization Parameters (Sidebar)
+        
+        - **Select Delivery Dates**: Choose which dates to include in optimization. Select "All" to include all dates.
+        - **Priority Importance**: Higher values give more weight to high-priority deliveries.
+        - **Time Window Importance**: Higher values enforce stricter adherence to delivery time windows.
+        - **Load Balancing vs Distance**: Higher values distribute deliveries more evenly across vehicles.
+        - **Maximum Vehicles**: Set the maximum number of vehicles to use for deliveries.
+        - **Minimum Time Window Compliance**: Set the minimum percentage of deliveries that must be within their time windows.
+        
+        ### 2. Generate Routes
+        
+        - Review the delivery statistics and vehicle availability information
+        - Click the **Generate Optimal Routes** button to run the optimization algorithm
+        - The algorithm will assign deliveries to vehicles based on your parameters
+        
+        ### 3. Review Optimization Results
+        
+        - **Overall Performance**: Check metrics like assigned deliveries, vehicles used, and time window compliance
+        - **Time & Distance Distribution**: See how delivery workload is distributed across vehicles
+        - **Route Map**: Interactive map showing the optimized routes for each vehicle
+          - Use the date filter to show routes for specific days
+          - Hover over markers and routes for detailed information
+        - **Calendar View**: View delivery schedules organized by date
+          - Green bars indicate on-time deliveries
+          - Orange bars indicate late deliveries
+          - Red bars indicate unassigned deliveries
+        
+        ### 4. Adjust and Refine
+        
+        If the results don't meet your requirements:
+        
+        - **Not enough vehicles?** Increase the maximum vehicles allowed
+        - **Time windows not met?** Decrease the time window importance or minimum compliance
+        - **High priority deliveries not assigned?** Increase priority importance
+        - **Routes too unbalanced?** Increase load balancing parameter
+        
+        Remember to click **Generate Optimal Routes** after changing any parameters to see the updated results.
+        """)
     
     # Initialize session state variables
     if 'optimization_result' not in st.session_state:
