@@ -1,0 +1,11 @@
+vehicle_id,vehicle_type,license_plate,driver_name,max_weight_kg,max_volume_m3,depot_name,depot_latitude,depot_longitude,start_time,end_time,max_working_hours,avg_speed_kmh,cost_per_km,status
+VEH001,Large,SZTN3764,Ahmad Zhang,2453.63,21.39,Loyang Industrial Park,1.360512,103.976556,07:00,17:00,8,30.14,1.32,Available
+VEH002,Large,SIPB3728,Raj Tan,1603.79,19.19,Tuas Logistics Hub,1.318709,103.639193,08:00,17:00,10,31.1,0.69,Available
+VEH003,Large,SLVJ8681,Michael Abdullah,1588.53,23.14,Kallang Way Industrial,1.331378,103.87287,10:00,20:00,10,39.95,1.29,Available
+VEH004,Large,SKQU4048,Wei Tan,2221.26,24.71,Jurong Industrial Estate,1.323339,103.699483,07:00,18:00,10,42.4,0.53,Available
+VEH005,Large,SHAF4500,Siti Wong,1550.74,24.73,Changi Logistics Centre,1.349357,103.974247,09:00,17:00,10,38.33,0.71,Available
+VEH006,Standard,SYBT6562,Kumar Abdullah,1023.79,9.2,Keppel Distripark,1.27022,103.822051,07:00,17:00,9,40.79,1.34,In Service
+VEH007,Standard,SWDP5010,Chong Kumar,846.4,8.3,Pandan Logistics Hub,1.318333,103.750779,07:00,17:00,9,31.51,0.84,Available
+VEH008,Large,SXVE5124,David Kumar,1635.57,15.47,Defu Industrial Park,1.360591,103.88876,07:00,21:00,9,42.04,0.56,Available
+VEH009,Standard,SNZH9061,Suresh Wong,1179.03,8.56,Alexandra Distripark,1.274301,103.801528,10:00,19:00,9,47.91,1.0,Available
+VEH010,Large,SUXD5014,Ali Abdullah,2449.97,16.49,Woodlands Industrial,1.442511,103.787383,08:00,17:00,10,33.91,1.35,In Service
