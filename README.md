@@ -87,6 +87,24 @@ To get started with this Streamlit application template, follow these steps:
 
 ---
 
+## Deployment
+
+This application is deployed on Hugging Face Spaces and is accessible at:
+
+🚀 [Delivery Route Optimization App](https://huggingface.co/spaces/Jing997/DeliveryRouteOptimisation)
+
+The deployed version provides all the features of the local application without requiring any installation. You can:
+
+- View and analyze optimized delivery routes
+- Interact with the map visualization
+- Explore the calendar view of scheduled deliveries
+- Test different optimization parameters
+- Filter deliveries by date, status, and priority
+
+The app is automatically updated whenever changes are pushed to the connected GitHub repository.
+
+---
+
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for more details.
