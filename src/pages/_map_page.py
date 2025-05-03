@@ -316,7 +316,7 @@ def map_page():
             else:
                 calendar_data['Color'] = 'rgb(0, 0, 255)'  # Default blue
             
-            # Get all available dates and add multi-select filter
+            # Get all available dates and add ƒmulti-select filter
             all_dates = sorted(calendar_data['delivery_date'].dt.date.unique())
 
             # Format dates for display in the dropdown

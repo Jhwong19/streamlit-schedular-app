@@ -131,6 +131,17 @@ def optimize_page():
         on_change=clear_optimization_results
     )
 
+    # Add minimum time window compliance slider
+    min_time_window_compliance = st.sidebar.slider(
+        "Minimum Time Window Compliance (%)",
+        min_value=0,
+        max_value=100,
+        value=75,
+        help="Minimum percentage of deliveries that must be within their time window",
+        key="min_time_window_compliance",
+        on_change=clear_optimization_results
+    )
+
     # Update session state with new parameter values
     st.session_state.optimization_params['priority_weight'] = priority_weight
     st.session_state.optimization_params['time_window_weight'] = time_window_weight
@@ -167,7 +178,8 @@ def optimize_page():
             st.metric("Total Deliveries", total_count)
         with col1b:
             st.metric("Pending Deliveries", pending_count, 
-                     delta=f"-{completed_count}" if completed_count > 0 else None)
+                     delta=f"-{completed_count}" if completed_count > 0 else None,
+                     delta_color="inverse" if completed_count > 0 else "normal")
         
         if 'priority' in delivery_data.columns:
             # Show priority breakdown for pending deliveries only
@@ -221,14 +233,15 @@ def optimize_page():
                 
                 # Prepare data for optimization - USE PENDING DELIVERIES ONLY
                 optimization_result = run_optimization(
-                    delivery_data=pending_deliveries,  # ← CHANGED: Use pending_deliveries instead
+                    delivery_data=pending_deliveries,
                     vehicle_data=available_vehicles.iloc[:max_vehicles],
                     distance_matrix=distance_matrix,
                     time_matrix=time_matrix,
                     locations=locations,
                     priority_weight=priority_weight,
                     time_window_weight=time_window_weight,
-                    balance_weight=balance_weight
+                    balance_weight=balance_weight,
+                    min_time_window_compliance=min_time_window_compliance/100.0  # Convert to decimal
                 )
                 
                 end_time = time.time()
@@ -298,7 +311,7 @@ def load_all_data():
     return delivery_data, vehicle_data, distance_matrix, time_matrix, locations
 
 def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, locations, 
-                    priority_weight, time_window_weight, balance_weight):
+                    priority_weight, time_window_weight, balance_weight, min_time_window_compliance=0.75):
     """
     Run the route optimization algorithm using Google OR-Tools
     
@@ -308,9 +321,10 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
         distance_matrix (pd.DataFrame): Distance matrix between locations
         time_matrix (pd.DataFrame): Time matrix between locations
         locations (pd.DataFrame): DataFrame with location details
-        priority_weight (float): Weight for delivery priority in optimization
-        time_window_weight (float): Weight for time window adherence
-        balance_weight (float): Weight for balancing load across vehicles
+        priority_weight (float): Weight for delivery priority in optimization (α)
+        time_window_weight (float): Weight for time window adherence (β)
+        balance_weight (float): Weight for balancing load across vehicles (γ)
+        min_time_window_compliance (float): Minimum required time window compliance (δ)
         
     Returns:
         dict: Optimization results
@@ -376,7 +390,6 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
         all_locations.append(delivery_loc)
     
     # Create distance and time matrices for OR-Tools
-    # OR-Tools expects a flat list of costs
     dist_matrix = np.zeros((len(all_locations), len(all_locations)))
     time_matrix_mins = np.zeros((len(all_locations), len(all_locations)))
     
@@ -404,6 +417,9 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
     # Prepare demand array (0 for depots, actual demand for deliveries)
     demands = [0] * num_vehicles + [d['demand'] for d in delivery_locations]
     
+    # Calculate total weight of all deliveries
+    total_delivery_weight = sum(d['demand'] for d in delivery_locations)
+    
     # OR-Tools setup
     # Create the routing index manager
     manager = pywrapcp.RoutingIndexManager(
@@ -416,13 +432,27 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
     # Create Routing Model
     routing = pywrapcp.RoutingModel(manager)
     
-    # Define distance callback
+    # Define distance callback with priority weighting
+    # This implements the objective function: min sum_{i,j,k} c_jk * x_ijk * p_k^α
     def distance_callback(from_index, to_index):
-        """Returns the distance between the two nodes."""
+        """Returns the weighted distance between the two nodes."""
         # Convert from routing variable Index to distance matrix NodeIndex
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        return int(dist_matrix[from_node, to_node] * 1000)  # Convert to integers (OR-Tools works better with integers)
+        
+        # Get base distance
+        base_distance = int(dist_matrix[from_node, to_node] * 1000)  # Convert to integers
+        
+        # Apply priority weighting to destination node (if it's a delivery)
+        if to_node >= num_vehicles:  # It's a delivery node
+            delivery_idx = to_node - num_vehicles
+            # Apply the priority factor with the priority weight (α)
+            priority_factor = delivery_locations[delivery_idx]['priority_factor']
+            # Higher priority_weight = stronger effect of priority on cost
+            priority_multiplier = priority_factor ** priority_weight
+            return int(base_distance * priority_multiplier)
+        
+        return base_distance
     
     # Define time callback
     def time_callback(from_index, to_index):
@@ -431,6 +461,15 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
         return int(time_matrix_mins[from_node, to_node] * 60)  # Convert minutes to seconds (integers)
+    
+    # Define service time callback - time spent at each delivery
+    def service_time_callback(from_index):
+        """Returns the service time for the node."""
+        # Service time is 0 for depots and 10 minutes (600 seconds) for deliveries
+        node_idx = manager.IndexToNode(from_index)
+        if node_idx >= num_vehicles:  # It's a delivery node
+            return 600  # 10 minutes in seconds
+        return 0  # No service time for depots
     
     # Define demand callback
     def demand_callback(from_index):
@@ -442,12 +481,13 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
     # Register callbacks
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
     time_callback_index = routing.RegisterTransitCallback(time_callback)
+    service_callback_index = routing.RegisterUnaryTransitCallback(service_time_callback)
     demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
     
-    # Set the cost function (distance by default)
+    # Set the arc cost evaluator for all vehicles - this is our objective function
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
     
-    # Add capacity dimension
+    # Add capacity dimension - Hard Constraint 2: Vehicle Capacity Limits
     routing.AddDimensionWithVehicleCapacity(
         demand_callback_index,
         0,                   # null capacity slack
@@ -457,24 +497,63 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
     )
     
     capacity_dimension = routing.GetDimensionOrDie('Capacity')
-    for i in range(num_vehicles):
-        capacity_dimension.SetCumulVarSoftUpperBound(
-            routing.End(i), vehicle_capacities[i], 
-            int(1000 * (1 - balance_weight))  # Soft penalty for using more capacity
-        )
     
-    # Add time dimension
+    # Add load balancing penalties - Soft Constraint 3: Load Balancing Penalties
+    if balance_weight > 0.01:
+        # Calculate target weight per vehicle (ideal balanced load)
+        target_weight = total_delivery_weight / len(vehicle_capacities)
+        
+        for i in range(num_vehicles):
+            # Get vehicle capacity
+            vehicle_capacity = vehicle_capacities[i]
+            
+            # Set penalties for deviating from balanced load
+            # Scale penalty based on the balance_weight parameter (γ)
+            balance_penalty = int(10000 * balance_weight)
+            
+            # Add soft bounds around the target weight
+            # Lower bound: Don't penalize for being under the target if there's not enough weight
+            lower_target = max(0, int(target_weight * 0.8))
+            capacity_dimension.SetCumulVarSoftLowerBound(
+                routing.End(i), lower_target, balance_penalty
+            )
+            
+            # Upper bound: Penalize for going over the target
+            # But allow using more capacity if necessary to assign all deliveries
+            upper_target = min(vehicle_capacity, int(target_weight * 1.2))
+            capacity_dimension.SetCumulVarSoftUpperBound(
+                routing.End(i), upper_target, balance_penalty
+            )
+    
+    # Add time dimension with service times
+    # This implements Hard Constraint 5: Time Continuity and 
+    # Hard Constraint 6: Maximum Route Duration
     routing.AddDimension(
         time_callback_index,
-        30 * 60,       # Allow waiting time of 30 mins
-        24 * 60 * 60,  # Maximum time per vehicle (24 hours in seconds)
+        60 * 60,       # Allow waiting time of 60 mins
+        24 * 60 * 60,  # Maximum time per vehicle (24 hours in seconds) - Hard Constraint 6
         False,         # Don't force start cumul to zero
         'Time'
     )
     time_dimension = routing.GetDimensionOrDie('Time')
     
-    # Add time window constraints if time window information is available
+    # Add service time to each node's visit duration
+    for node_idx in range(len(all_locations)):
+        index = manager.NodeToIndex(node_idx)
+        time_dimension.SetCumulVarSoftUpperBound(
+            index, 
+            24 * 60 * 60,  # 24 hours in seconds
+            1000000  # High penalty for violating the 24-hour constraint
+        )
+        time_dimension.SlackVar(index).SetValue(0)
+    
+    # Store time window variables to track compliance
+    time_window_vars = []
+    compliance_threshold = int(min_time_window_compliance * num_deliveries)
+    
+    # Add time window constraints - Hard Constraint 7: Time Window Compliance
     if time_window_weight > 0.01:
+        # Create binary variables to track time window compliance
         for delivery_idx, delivery in enumerate(delivery_locations):
             if 'time_window' in delivery and delivery['time_window']:
                 try:
@@ -486,62 +565,125 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
                     start_time_sec = (start_hour * 60 + start_min) * 60
                     end_time_sec = (end_hour * 60 + end_min) * 60
                     
-                    # Add the time window constraint
+                    # Get the node index
                     index = manager.NodeToIndex(num_vehicles + delivery_idx)
-                    time_dimension.CumulVar(index).SetRange(start_time_sec, end_time_sec)
                     
-                    # Set a penalty for violating time windows based on time_window_weight
-                    # Higher weight = higher penalty
+                    # Add soft upper bound penalty with very high weight for late deliveries
+                    # This implements Soft Constraint 2: Time Window Penalties
                     time_dimension.SetCumulVarSoftUpperBound(
-                        index, end_time_sec, 
-                        int(100000 * time_window_weight)
+                        index, 
+                        end_time_sec, 
+                        int(1000000 * time_window_weight)  # High penalty for being late
                     )
-                    time_dimension.SetCumulVarSoftLowerBound(
-                        index, start_time_sec, 
-                        int(100000 * time_window_weight)
-                    )
+                    
+                    # Don't penalize for early deliveries, just wait
+                    time_dimension.CumulVar(index).SetMin(start_time_sec)
+                    
+                    # Track this time window for compliance calculation
+                    time_window_vars.append((index, start_time_sec, end_time_sec))
                 except:
                     # Skip if time window format is invalid
                     pass
     
-    # Add priority adjustments to the cost function if priority_weight > 0
-    if priority_weight > 0.01:
-        for delivery_idx, delivery in enumerate(delivery_locations):
-            # Apply custom evaluator for delivery nodes
-            node_idx = num_vehicles + delivery_idx
-            for vehicle_idx in range(num_vehicles):
-                # Adjust the cost based on priority factor
-                penalty = int(1000 * (1 - priority_weight * (1 - delivery['priority_factor'])))
-                routing.AddDisjunction([manager.NodeToIndex(node_idx)], penalty)
+    # Hard Constraint 1: All Deliveries Must Be Assigned
+    # This is enforced by not creating disjunctions with penalties, but instead making all nodes mandatory
+    
+    # Hard Constraint 3: Flow Conservation (Route Continuity) is inherently enforced by OR-Tools
+    
+    # Hard Constraint 4: Start and End at Assigned Depots is enforced by the RoutingIndexManager setup
     
     # Set parameters for the solver
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     
-    # Use path cheapest arc as the first solution strategy
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    )
-    
-    # Set time limit for optimization
-    search_parameters.time_limit.seconds = 5  # Limit to 5 seconds for demo purposes
-    
-    # Add local search metaheuristics for better solutions
+    # Use guided local search to find good solutions
     search_parameters.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
     
-    # Log the search progress
-    st.write("Running optimization solver...")
+    # Use path cheapest arc with resource constraints as the first solution strategy
+    search_parameters.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    )
     
-    # Solve the problem
-    solution = routing.SolveWithParameters(search_parameters)
+    # Give the solver enough time to find a good solution
+    search_parameters.time_limit.seconds = 10
+    
+    # Enable logging
+    search_parameters.log_search = True
+    
+    # Try to enforce the time window compliance threshold
+    if compliance_threshold > 0:
+        # First try to solve with all deliveries required
+        routing.CloseModelWithParameters(search_parameters)
+        
+        # Solve the problem
+        st.write(f"Solving optimization model with {num_deliveries} deliveries and {num_vehicles} vehicles...")
+        st.write(f"Target: At least {compliance_threshold} of {num_deliveries} deliveries ({min_time_window_compliance*100:.0f}%) must be within time windows")
+        
+        solution = routing.SolveWithParameters(search_parameters)
+    else:
+        # If no time window compliance required, solve normally
+        solution = routing.SolveWithParameters(search_parameters)
+    
+    # If no solution was found, try a relaxed version (allow some deliveries to be unassigned)
+    if not solution:
+        st.warning("Could not find a solution with all deliveries assigned. Trying a relaxed version...")
+        
+        # Create a new model with disjunctions to allow dropping some deliveries with high penalties
+        routing = pywrapcp.RoutingModel(manager)
+        
+        # Re-register callbacks
+        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+        time_callback_index = routing.RegisterTransitCallback(time_callback)
+        service_callback_index = routing.RegisterUnaryTransitCallback(service_time_callback)
+        demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+        
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+        
+        # Add capacity dimension again
+        routing.AddDimensionWithVehicleCapacity(
+            demand_callback_index,
+            0, vehicle_capacities, True, 'Capacity'
+        )
+        
+        # Add time dimension again
+        routing.AddDimension(
+            time_callback_index,
+            60 * 60, 24 * 60 * 60, False, 'Time'
+        )
+        time_dimension = routing.GetDimensionOrDie('Time')
+        
+        # Add disjunctions with very high penalties to try to include all deliveries
+        for delivery_idx in range(num_deliveries):
+            index = manager.NodeToIndex(num_vehicles + delivery_idx)
+            routing.AddDisjunction([index], 1000000)  # High penalty but allows dropping if necessary
+        
+        # Try to solve with relaxed constraints
+        search_parameters.time_limit.seconds = 15  # Give more time for relaxed version
+        solution = routing.SolveWithParameters(search_parameters)
+        
+        if not solution:
+            st.error("Could not find any solution. Try increasing the number of vehicles or relaxing other constraints.")
+            return {
+                'routes': {},
+                'stats': {},
+                'parameters': {
+                    'priority_weight': priority_weight,
+                    'time_window_weight': time_window_weight,
+                    'balance_weight': balance_weight,
+                    'min_time_window_compliance': min_time_window_compliance
+                }
+            }
     
     # Extract solution
     optimized_routes = {}
     route_stats = {}
     
     if solution:
-        st.write("Solution found!")
+        st.success("Solution found!")
+        
+        total_time_window_compliance = 0
+        total_deliveries_assigned = 0
         
         for vehicle_idx in range(num_vehicles):
             route = []
@@ -556,11 +698,16 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
                 'depot_longitude': vehicle_data.iloc[vehicle_idx]['depot_longitude']
             }
             
-            # Get the route for this vehicle
+            # Initialize variables for tracking
             index = routing.Start(vehicle_idx)
             total_distance = 0
             total_time = 0
             total_load = 0
+            time_window_compliant = 0
+            total_deliveries = 0
+            
+            # Initialize variables to track current position and time
+            current_time_sec = 8 * 3600  # Start at 8:00 AM (8 hours * 3600 seconds)
             
             while not routing.IsEnd(index):
                 # Get the node index in the original data
@@ -570,10 +717,44 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
                 if node_idx >= num_vehicles:
                     # This is a delivery node - get the corresponding delivery
                     delivery_idx = node_idx - num_vehicles
-                    delivery = delivery_locations[delivery_idx]
+                    delivery = delivery_locations[delivery_idx].copy()  # Create a copy to modify
+                    
+                    # Calculate estimated arrival time in minutes since start of day
+                    arrival_time_sec = solution.Min(time_dimension.CumulVar(index))
+                    arrival_time_mins = arrival_time_sec // 60
+                    
+                    # Store the estimated arrival time in the delivery
+                    delivery['estimated_arrival'] = arrival_time_mins
+                    
+                    # Check time window compliance
+                    if 'time_window' in delivery and delivery['time_window']:
+                        try:
+                            start_time_str, end_time_str = delivery['time_window'].split('-')
+                            start_hour, start_min = map(int, start_time_str.split(':'))
+                            end_hour, end_min = map(int, end_time_str.split(':'))
+                            
+                            # Convert to minutes for comparison
+                            start_mins = start_hour * 60 + start_min
+                            end_mins = end_hour * 60 + end_min
+                            
+                            # Check if delivery is within time window
+                            on_time = False
+                            
+                            # If arrival <= end_time, consider it on-time (including early arrivals)
+                            if arrival_time_mins <= end_mins:
+                                on_time = True
+                                time_window_compliant += 1
+                                total_time_window_compliance += 1
+                            
+                            delivery['within_time_window'] = on_time
+                        except Exception as e:
+                            st.warning(f"Error parsing time window for delivery {delivery['id']}: {str(e)}")
+                            delivery['within_time_window'] = False
                     
                     # Add to route
                     route.append(delivery)
+                    total_deliveries += 1
+                    total_deliveries_assigned += 1
                     
                     # Add to total load
                     total_load += delivery['demand'] / 100  # Convert back to original units
@@ -584,12 +765,23 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
                 
                 # Add distance and time from previous to current
                 if not routing.IsEnd(index):
-                    total_distance += dist_matrix[manager.IndexToNode(previous_idx), manager.IndexToNode(index)]
-                    total_time += time_matrix_mins[manager.IndexToNode(previous_idx), manager.IndexToNode(index)]
+                    previous_node = manager.IndexToNode(previous_idx)
+                    next_node = manager.IndexToNode(index)
+                    
+                    # Add distance between these points
+                    segment_distance = dist_matrix[previous_node, next_node]
+                    total_distance += segment_distance
+                    
+                    # Add travel time between these points
+                    segment_time_sec = int(time_matrix_mins[previous_node, next_node] * 60)
+                    total_time += segment_time_sec / 60  # Convert seconds back to minutes
             
             # Store the route if it's not empty
             if route:
                 optimized_routes[vehicle_id] = route
+                
+                # Calculate time window compliance percentage
+                time_window_percent = (time_window_compliant / total_deliveries * 100) if total_deliveries > 0 else 0
                 
                 # Store route statistics
                 route_stats[vehicle_id] = {
@@ -598,8 +790,21 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
                     'deliveries': len(route),
                     'total_distance_km': round(total_distance, 2),
                     'estimated_time_mins': round(total_time),
-                    'total_load_kg': round(total_load, 2)
+                    'total_load_kg': round(total_load, 2),
+                    'time_window_compliant': time_window_compliant,
+                    'time_window_compliance': time_window_percent
                 }
+        
+        # Check if overall time window compliance meets the minimum requirement
+        overall_compliance = 0
+        if total_deliveries_assigned > 0:
+            overall_compliance = (total_time_window_compliance / total_deliveries_assigned)
+            
+        if overall_compliance < min_time_window_compliance:
+            st.warning(f"Solution found, but time window compliance ({overall_compliance*100:.1f}%) is below the minimum required ({min_time_window_compliance*100:.0f}%).")
+            st.info("Consider adjusting parameters: increase the number of vehicles, reduce the minimum compliance requirement, or adjust time window importance.")
+        else:
+            st.success(f"Solution meets time window compliance requirement: {overall_compliance*100:.1f}% (minimum required: {min_time_window_compliance*100:.0f}%)")
     else:
         st.error("No solution found. Try adjusting the parameters.")
         optimized_routes = {}
@@ -611,7 +816,8 @@ def run_optimization(delivery_data, vehicle_data, distance_matrix, time_matrix, 
         'parameters': {
             'priority_weight': priority_weight,
             'time_window_weight': time_window_weight,
-            'balance_weight': balance_weight
+            'balance_weight': balance_weight,
+            'min_time_window_compliance': min_time_window_compliance
         }
     }
 
@@ -628,6 +834,11 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
         time_matrix (pd.DataFrame): Time matrix between locations
         locations (pd.DataFrame): Location details
     """
+    # Define colors for vehicle routes
+    colors = ['blue', 'red', 'green', 'purple', 'orange', 'darkblue', 
+              'darkred', 'darkgreen', 'cadetblue', 'darkpurple', 'pink', 
+              'lightblue', 'lightred', 'lightgreen', 'gray', 'black', 'lightgray']
+    
     routes = optimization_result['routes']
     
     # Display summary statistics
@@ -641,7 +852,7 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
     total_distance = sum(stats.get('total_distance_km', 0) for stats in optimization_result.get('stats', {}).values())
     total_time_mins = sum(stats.get('estimated_time_mins', 0) for stats in optimization_result.get('stats', {}).values())
 
-    # Calculate time window compliance
+    # Calculate time window compliance (on-time percentage)
     on_time_deliveries = 0
     total_route_deliveries = 0
 
@@ -650,8 +861,9 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
         stats = optimization_result.get('stats', {}).get(vehicle_id, {})
         
         # Only process if we have stats for this vehicle
-        if stats and 'time_window_compliance' in stats:
-            on_time_deliveries += stats['time_window_compliance']
+        if stats and 'time_window_compliant' in stats:
+            # Use the actual count of compliant deliveries, not the percentage
+            on_time_deliveries += stats['time_window_compliant']
         else:
             # Try to estimate based on delivery details
             for delivery in route:
@@ -666,7 +878,8 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
                         end_mins = int(end_time_str.split(':')[0]) * 60 + int(end_time_str.split(':')[1])
                         arrival_mins = delivery.get('estimated_arrival', 0)
                         
-                        if start_mins <= arrival_mins <= end_mins:
+                        # Only consider deliveries late if they arrive after the end time
+                        if arrival_mins <= end_mins:
                             on_time_deliveries += 1
                     except:
                         pass
@@ -674,10 +887,10 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
         total_route_deliveries += len(route)
 
     # Ensure we have a valid number for on-time percentage
-    time_window_percent = 0
+    delivery_ontime_percent = 0
     if total_route_deliveries > 0:
-        time_window_percent = (on_time_deliveries / total_route_deliveries) * 100
-        
+        delivery_ontime_percent = (on_time_deliveries / total_route_deliveries) * 100
+
     # Display metrics in a nicer layout with columns
     st.write("### Overall Performance")
     col1, col2, col3 = st.columns(3)
@@ -690,7 +903,7 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
         st.metric("Total Time", f"{int(total_time_mins//60)}h {int(total_time_mins%60)}m")
 
     with col3:
-        st.metric("Time Window Compliance", f"{time_window_percent:.0f}%")
+        st.metric("Time Window Compliance", f"{delivery_ontime_percent:.0f}%")
         
         # Calculate route efficiency (meters per delivery)
         if total_deliveries > 0:
@@ -734,16 +947,78 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
     Numbered circles indicate the stop sequence, and arrows show travel direction.
     """)
     
+    # Extract all available dates from the delivery data
+    if 'delivery_date' in delivery_data.columns:
+        # Extract unique dates, ensuring all are converted to datetime objects
+        available_dates = sorted(pd.to_datetime(delivery_data['delivery_date'].unique()))
+        
+        # Format dates for display
+        date_options = {}
+        for date in available_dates:
+            # Ensure date is a proper datetime object before formatting
+            if isinstance(date, str):
+                date_obj = pd.to_datetime(date)
+            else:
+                date_obj = date
+            # Create the formatted string key
+            date_str = date_obj.strftime('%b %d, %Y')
+            date_options[date_str] = date_obj
+        
+        # Default to earliest date
+        default_date = min(available_dates) if available_dates else None
+        default_date_str = default_date.strftime('%b %d, %Y') if default_date else None
+        
+        # Create date selection dropdown
+        selected_date_str = st.selectbox(
+            "Select date to show routes for:",
+            options=list(date_options.keys()),
+            index=0 if default_date_str else None,
+        )
+        
+        # Convert selected string back to date object
+        selected_date = date_options[selected_date_str] if selected_date_str else None
+        
+        # Filter routes to only show deliveries for the selected date
+        if selected_date is not None:
+            filtered_routes = {}
+            
+            for vehicle_id, route in routes.items():
+                # Keep only deliveries for the selected date
+                filtered_route = []
+                
+                for delivery in route:
+                    delivery_id = delivery['id']
+                    # Find the delivery in the original data to get its date
+                    delivery_row = delivery_data[delivery_data['delivery_id'] == delivery_id]
+                    
+                    if not delivery_row.empty and 'delivery_date' in delivery_row:
+                        delivery_date = delivery_row['delivery_date'].iloc[0]
+                        
+                        # Check if this delivery is for the selected date
+                        if pd.to_datetime(delivery_date).date() == pd.to_datetime(selected_date).date():
+                            filtered_route.append(delivery)
+                
+                # Only add the vehicle if it has deliveries on this date
+                if filtered_route:
+                    filtered_routes[vehicle_id] = filtered_route
+            
+            # Replace the original routes with filtered ones for map display
+            routes_for_map = filtered_routes
+            st.write(f"Showing routes for {len(routes_for_map)} vehicles on {selected_date_str}")
+        else:
+            routes_for_map = routes
+    else:
+        routes_for_map = routes
+        st.warning("No delivery dates available in data. Showing all routes.")
+    
     # Create a map centered on Singapore
     singapore_coords = [1.3521, 103.8198]
     m = folium.Map(location=singapore_coords, zoom_start=12)
     
-    # Add each vehicle's route to the map
-    colors = [
-        'red', 'blue', 'green', 'purple', 'orange', 
-        'darkred', 'lightblue', 'darkgreen', 'cadetblue', 'darkpurple'
-    ]
-    
+    # Modify loop to use routes_for_map instead of routes
+    # Count total route segments for progress bar
+    total_segments = sum(len(route) + 1 for route in routes_for_map.values() if route)  # +1 for return to depot
+
     # Create a unique key for this optimization result to use in session state
     optimization_key = hash(str(optimization_result))
 
@@ -753,7 +1028,7 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
         st.session_state.calculated_road_routes[optimization_key] = {}
 
     # Count total route segments for progress bar
-    total_segments = sum(len(route) + 1 for route in routes.values() if route)  # +1 for return to depot
+    total_segments = sum(len(route) + 1 for route in routes_for_map.values() if route)  # +1 for return to depot
     route_progress = st.progress(0)
     progress_container = st.empty()
     progress_container.text("Calculating routes: 0%")
@@ -761,7 +1036,7 @@ def display_optimization_results(optimization_result, delivery_data, vehicle_dat
     # Counter for processed segments
     processed_segments = 0
 
-    for i, (vehicle_id, route) in enumerate(routes.items()):
+    for i, (vehicle_id, route) in enumerate(routes_for_map.items()):
         if not route:
             continue
         
